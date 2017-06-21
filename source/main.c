@@ -71,8 +71,14 @@ int main()
 	fsInit();
 	AM_InitializeExternalTitleDatabase(false);
 	
-	PrintConsole topScreen, bottomScreen;
+	PrintConsole topScreen, bottomScreen, menuWindow;
 	consoleInit(GFX_TOP, &topScreen);
+	consoleInit(GFX_TOP, &menuWindow);
+	consoleSetWindow(&menuWindow,
+	                 (int)((menuWindow.consoleWidth - MENU_WIDTH)/2)-1,
+	                 (int)((menuWindow.consoleHeight - MENU_HEIGHT)/2),
+	                 MENU_WIDTH, MENU_HEIGHT);
+	
 	consoleInit(GFX_BOTTOM, &bottomScreen);
 
 	consoleSelect(&topScreen);
@@ -93,7 +99,7 @@ int main()
 		
 		while (aptMainLoop()) {
 
-			consoleSelect(&topScreen);
+			consoleSelect(&menuWindow);
 			drawMenu(&parsed_config, state, selected_entry);
 			consoleSelect(&bottomScreen);
 			
