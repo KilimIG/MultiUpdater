@@ -7,6 +7,36 @@
 #include "7z/7zCrc.h"
 #include "7z/7zMemInStream.h"
 
+Result openFile(const char * path, Handle * filehandle, bool write)
+{
+	FS_Archive archive = (FS_Archive){ARCHIVE_SDMC};
+	FS_Path emptyPath = fsMakePath(PATH_ASCII, "");
+	u32 flags = (write ? (FS_OPEN_CREATE | FS_OPEN_WRITE) : FS_OPEN_READ);
+	int prefixlen = 0;
+	
+	if (!strncmp(path, "ctrnand:/", 9)) {
+		archive = (FS_Archive){ARCHIVE_NAND_CTR_FS};
+		prefixlen = 8;
+	}
+	else if (!strncmp(path, "twlp:/", 6)) {
+		archive = (FS_Archive){ARCHIVE_TWL_PHOTO};
+		prefixlen = 5;
+	}
+	else if (!strncmp(path, "twln:/", 6)) {
+		archive = (FS_Archive){ARCHIVE_NAND_TWL_FS};
+		prefixlen = 5;
+	}
+	else if (!strncmp(path, "sdmc:/", 6)) {
+		prefixlen = 5;
+	}
+	
+	FS_Path filePath = fsMakePath(PATH_ASCII, path+prefixlen);
+	Result ret = FSUSER_OpenFileDirectly(filehandle, archive, emptyPath, filePath, flags, 0);
+	if (ret != 0) printf("Error in:\nFSUSER_OpenFileDirectly\n");
+	
+	return ret;
+}
+
 Result copyFile(const char * srcpath, const char * destpath)
 {
 	if (srcpath == NULL || destpath == NULL) {
@@ -14,9 +44,10 @@ Result copyFile(const char * srcpath, const char * destpath)
 		return -1;
 	}
 	
-	FILE *srcptr = fopen(srcpath, "rb");
-	if (srcptr == NULL) {
-		printf("Can't copy, source file doesn't exist.\n");
+	Handle filehandle;
+	Result ret = openFile(srcpath, &filehandle, false);
+	if (ret != 0) {
+		printf("Can't copy, couldn't open source file.\n");
 		return -2;
 	}
 	
@@ -28,23 +59,19 @@ Result copyFile(const char * srcpath, const char * destpath)
 	
 	printf("Copying:\n%s\nto:\n%s\n", srcpath, destpath);
 	
-	fseek(srcptr, 0, SEEK_END);
-	u32 size = ftell(srcptr);
-	fseek(srcptr, 0, SEEK_SET);
-	
-	printf("Copying %lu bytes.\n", size);
-	
-	u32 toRead = 0x1000;
-	u8 * buf = malloc(toRead);
+	u8 * buf = malloc(0x1000);
+	u32 bytesRead = 0;
+	u64 offset = 0;
 	
 	do {
-		if (size < toRead) toRead = size;
-		fread(buf, 1, toRead, srcptr);
-		fwrite(buf, 1, toRead, destptr);
-		size -= toRead;
-	} while(size);
+		readFile(filehandle, &bytesRead, offset, buf, 0x1000);
+		fwrite(buf, 1, bytesRead, destptr);
+		offset += bytesRead;
+	} while(bytesRead);
 	
-	fclose(srcptr);
+	printf("Copied %llu bytes.\n", offset);
+	
+	closeFile(filehandle);
 	fclose(destptr);
 	free(buf);
 	
@@ -144,14 +171,18 @@ Result extractFileFrom7z(const char * archive_file, const char * filename, const
 				goto finish;
 			}
 			
-			FILE * fh = fopen(filepath, "wb");
-			if (fh == NULL) {
+			Handle filehandle;
+			u32 bytesWritten = 0;
+			u64 offset = 0;
+			
+			ret = openFile(filepath, &filehandle, true);
+			if (ret != 0) {
 				printf("Error: couldn't open file to write.\n");
 				return EXTRACTION_ERROR_WRITEFILE;
 			}
 			
-			fwrite(buf+offset, fileSize, 1, fh);
-			fclose(fh);
+			ret = writeFile(filehandle, &bytesWritten, offset, buf+offset, (u32)fileSize);
+			closeFile(filehandle);
 			
 			free(buf);
 			
@@ -182,10 +213,12 @@ Result extractFileFromZip(const char * archive_file, const char * filename, cons
 	
 	Result ret = 0;
 	u8 * buf = NULL;
-	FILE * fh = NULL;
+	Handle filehandle;
+	u32 bytesWritten = 0;
+	u64 offset = 0;
 	
-	fh = fopen(filepath, "wb");
-	if (fh == NULL) {
+	ret = openFile(filepath, &filehandle, true);
+	if (ret != 0) {
 		printf("Error: couldn't open file to write.\n");
 		return EXTRACTION_ERROR_WRITEFILE;
 	}
@@ -193,7 +226,7 @@ Result extractFileFromZip(const char * archive_file, const char * filename, cons
 	unzFile uf = unzOpen64(archive_file);
 	if (uf == NULL) {
 		printf("Couldn't open zip file.\n");
-		fclose(fh);
+		closeFile(filehandle);
 		return EXTRACTION_ERROR_ARCHIVE_OPEN;
 	}
 	
@@ -232,8 +265,8 @@ Result extractFileFromZip(const char * archive_file, const char * filename, cons
 			if (size < toRead) toRead = size;
 			ret = unzReadCurrentFile(uf, buf, toRead);
 			if (ret > 0) {
-				fwrite(buf, 1, toRead, fh);
-				ret = 0;
+				ret = writeFile(filehandle, &bytesWritten, offset, buf, toRead);
+				offset += toRead;
 			}
 			else {
 				ret = EXTRACTION_ERROR_READ_IN_ARCHIVE;
@@ -247,7 +280,7 @@ Result extractFileFromZip(const char * archive_file, const char * filename, cons
 	free(buf);
 	unzClose(uf);
 	
-	fclose(fh);
+	closeFile(filehandle);
 	
 	return ret;
 }
